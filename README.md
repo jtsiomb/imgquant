@@ -3,8 +3,8 @@ imgquant
 
 About
 -----
-imgquant is a tool for quantizing image colors and perform a number of
-operations useful on retro platforms:
+imgquant is a tool for image color quantization, and other operations useful
+when hacking for retro platforms:
 
  - color quantization to an arbitrary colormap size
  - colormap generation with optional shade LUT
