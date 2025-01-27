@@ -40,6 +40,7 @@ int main(int argc, char **argv)
 	int tile_width = 0, tile_height = 0;
 	int tile_dedup = 0;
 	struct tilemap tmap;
+	enum dither dither = DITHER_NONE;
 
 	for(i=1; i<argc; i++) {
 		if(argv[i][0] == '-') {
@@ -66,6 +67,10 @@ int main(int argc, char **argv)
 						fprintf(stderr, "-C must be followed by the number of colors to reduce down to\n");
 						return 1;
 					}
+					break;
+
+				case 'd':
+					dither = DITHER_FLOYD_STEINBERG;
 					break;
 
 				case 's':
@@ -198,7 +203,7 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
-		quantize_image(&img, maxcol, DITHER_NONE, shade_levels, shade_lut);
+		quantize_image(&img, maxcol, dither, shade_levels, shade_lut);
 
 		lutptr = shade_lut;
 		for(i=0; i<maxcol; i++) {
@@ -220,7 +225,7 @@ int main(int argc, char **argv)
 			fprintf(stderr, "requested reduction to %d colors, but image has %d colors\n", maxcol, img.cmap_ncolors);
 			return 1;
 		}
-		quantize_image(&img, maxcol, DITHER_NONE, 0, 0);
+		quantize_image(&img, maxcol, dither, 0, 0);
 	}
 
 	if(cmap_fname) {
