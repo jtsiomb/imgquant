@@ -23,3 +23,14 @@ This program is free software, feel free to use, modify and/or redistribute it
 under the terms of the GNU General Public License v3, or at your option any
 later version published by the Free Software Foundation. See COPYING for
 details.
+
+Usage examples
+--------------
+Convert true color pre-rendered tileset to 128 colors, save the result as
+palettized PNG (`out.png`), and also generate a 16-level shade LUT and save it
+as a separate file (`out.slut`):
+
+    ./imgquant tileset.png -P -o out.png -C 128 -s 16 -os out.slut
+               \_________/  ^            \____/ \___/  \_________/
+               input file   |      max # colors   |    shade LUT output file
+                   output as PNG      generate 16 level shade LUT

@@ -349,6 +349,40 @@ void put_pixel(struct image *img, int x, int y, unsigned int pix)
 	}
 }
 
+void put_pixel_rgb(struct image *img, int x, int y, unsigned int *rgb)
+{
+	unsigned char *pptr24;
+	unsigned short *pptr16;
+	unsigned int *pptr32;
+
+	switch(img->bpp) {
+	case 15:
+		pptr16 = (unsigned short*)(img->pixels + y * img->pitch + x * 2);
+		*pptr16 = ((rgb[0] & 0xf8) << 7) | ((rgb[1] & 0xf8) << 2) | ((rgb[2] * 0xf8) >> 3);
+		break;
+
+	case 16:
+		pptr16 = (unsigned short*)(img->pixels + y * img->pitch + x * 2);
+		*pptr16 = ((rgb[0] & 0xf8) << 8) | ((rgb[1] & 0xfc) << 3) | ((rgb[2] * 0xf8) >> 3);
+		break;
+
+	case 24:
+		pptr24 = img->pixels + y * img->pitch + x * 3;
+		pptr24[0] = rgb[0];
+		pptr24[1] = rgb[1];
+		pptr24[2] = rgb[2];
+		break;
+
+	case 32:
+		pptr32 = (unsigned int*)(img->pixels + y * img->pitch + x * 4);
+		*pptr32 = ((rgb[2] & 0xff) << 16) | ((rgb[1] & 0xff) << 8) | (rgb[0] & 0xff);
+		break;
+
+	default:
+		fprintf(stderr, "put_pixel_rgb: not implemented for %d bpp\n", img->bpp);
+	}
+}
+
 void overlay_key(struct image *src, unsigned int key, struct image *dst)
 {
 	int i, j;
@@ -367,310 +401,3 @@ void overlay_key(struct image *src, unsigned int key, struct image *dst)
 		}
 	}
 }
-
-#if 0
-/* ---- color quantization ---- */
-struct octnode;
-
-struct octree {
-	struct octnode *root;
-	struct octnode *levn[8];
-	int ncol, maxcol;
-};
-
-struct octnode {
-	struct octree *tree;
-	int r, g, b, nref;
-	int palidx;
-	int nsub;
-	struct octnode *sub[8];
-	struct octnode *next;
-};
-
-static void add_color(struct octree *ot, int r, int g, int b);
-static void reduce_colors(struct octree *ot);
-static int assign_colors(struct octnode *on, int next, struct cmapent *cmap);
-static int lookup_color(struct octree *ot, int r, int g, int b);
-static struct octnode *new_node(struct octree *ot, int lvl);
-static void del_node(struct octnode *on, int lvl);
-static void print_tree(struct octnode *n, int lvl);
-static int count_leaves(struct octnode *n);
-
-void quantize_image(struct image *img, int maxcol)
-{
-	int i, j, cidx;
-	unsigned int rgb[3];
-	struct octree ot = {0};
-	struct image newimg = *img;
-
-	if(img->bpp > 8) {
-		newimg.bpp = 8;
-		newimg.nchan = 1;
-		newimg.scansz = newimg.width;
-		newimg.pitch = 8 * img->pitch / img->bpp;
-	}
-
-	ot.root = new_node(&ot, 0);
-	ot.maxcol = maxcol;
-
-	for(i=0; i<img->height; i++) {
-		for(j=0; j<img->width; j++) {
-			get_pixel_rgb(img, j, i, rgb);
-			add_color(&ot, rgb[0], rgb[1], rgb[2]);
-
-			while(count_leaves(ot.root) > ot.maxcol) {
-			//while(ot.ncol > ot.maxcol) {
-				reduce_colors(&ot);
-			}
-		}
-	}
-
-	/* use created octree to generate the palette */
-	newimg.cmap_ncolors = assign_colors(ot.root, 0, newimg.cmap);
-
-	/* replace image pixels */
-	for(i=0; i<img->height; i++) {
-		for(j=0; j<img->width; j++) {
-			get_pixel_rgb(img, j, i, rgb);
-			cidx = lookup_color(&ot, rgb[0], rgb[1], rgb[2]);
-			assert(cidx >= 0 && cidx < maxcol);
-			put_pixel(&newimg, j, i, cidx);
-		}
-	}
-
-	*img = newimg;
-}
-
-static int subidx(int bit, int r, int g, int b)
-{
-	assert(bit >= 0 && bit < 8);
-	bit = 7 - bit;
-	return ((r >> bit) & 1) | ((g >> (bit - 1)) & 2) | ((b >> (bit - 2)) & 4);
-}
-
-static int tree_height(struct octnode *on)
-{
-	int i, subh, max = 0;
-
-	if(!on) return 0;
-
-	for(i=0; i<8; i++) {
-		subh = tree_height(on->sub[i]);
-		if(subh > max) max = subh;
-	}
-	return max + 1;
-}
-
-static void add_color(struct octree *ot, int r, int g, int b)
-{
-	int i, idx;
-	struct octnode *on;
-
-	on = ot->root;
-	for(i=0; i<8; i++) {
-		idx = subidx(i, r, g, b);
-
-		if(!on->sub[idx]) {
-			on->sub[idx] = new_node(ot, i + 1);
-			if(i == 7) {
-				/* this only adds a color if the parent node was previously not
-				 * a leaf. Otherwise the new one just takes the parent's place
-				 */
-				ot->ncol++;
-			}
-			on->nsub++;
-		}
-
-		on->r += r;
-		on->g += g;
-		on->b += b;
-		on->nref++;
-
-		on = on->sub[idx];
-	}
-
-	on->r += r;
-	on->g += g;
-	on->b += b;
-	on->nref++;
-}
-
-static int count_nodes(struct octnode *n)
-{
-	int count = 0;
-	while(n) {
-		count++;
-		n = n->next;
-	}
-	return count;
-}
-
-static int count_leaves(struct octnode *n)
-{
-	int i, cnt;
-
-	if(!n) return 0;
-	if(n->nsub <= 0) return 1;
-
-	cnt = 0;
-	for(i=0; i<8; i++) {
-		cnt += count_leaves(n->sub[i]);
-	}
-	return cnt;
-}
-
-static void reduce_colors(struct octree *ot)
-{
-	int i, lvl, best_nref;
-	struct octnode *n, *best;
-
-	lvl = 8;
-	while(--lvl >= 0) {
-		best_nref = INT_MAX;
-		best = 0;
-		n = ot->levn[lvl];
-
-		while(n) {
-			if(n->nref < best_nref && n->nsub) {
-				best = n;
-				best_nref = n->nref;
-			}
-			n = n->next;
-		}
-
-		if(best) {
-			for(i=0; i<8; i++) {
-				if(best->sub[i]) {
-					del_node(best->sub[i], lvl + 1);
-					best->sub[i] = 0;
-				}
-			}
-			if(best->nsub) {
-				/* this wasn't previously a leaf, but now it is */
-				ot->ncol++;
-				best->nsub = 0;
-			}
-			break;
-		}
-	}
-}
-
-static int assign_colors(struct octnode *on, int next, struct cmapent *cmap)
-{
-	int i;
-
-	if(!on) return next;
-
-	if(on->nsub <= 0) {
-		assert(next < on->tree->maxcol);
-		cmap[next].r = on->r / on->nref;
-		cmap[next].g = on->g / on->nref;
-		cmap[next].b = on->b / on->nref;
-		on->palidx = next++;
-	}
-
-	for(i=0; i<8; i++) {
-		next = assign_colors(on->sub[i], next, cmap);
-	}
-	return next;
-}
-
-static int lookup_color(struct octree *ot, int r, int g, int b)
-{
-	int i, idx;
-	struct octnode *on = ot->root;
-
-	for(i=0; i<8; i++) {
-		idx = subidx(i, r, g, b);
-		if(!on->sub[idx]) break;
-		on = on->sub[idx];
-	}
-
-	return on->palidx;
-}
-
-static int have_node(struct octnode *list, struct octnode *n)
-{
-	while(list) {
-		if(list == n) return 1;
-		list = list->next;
-	}
-	return 0;
-}
-
-static struct octnode *new_node(struct octree *ot, int lvl)
-{
-	struct octnode *on;
-
-	if(!(on = calloc(1, sizeof *on))) {
-		perror("failed to allocate octree node");
-		abort();
-	}
-
-	on->tree = ot;
-	on->palidx = -1;
-
-	if(lvl < 8) {
-		if(have_node(ot->levn[lvl], on)) {
-			fprintf(stderr, "double-insertion!\n");
-			abort();
-		}
-		on->next = ot->levn[lvl];
-		ot->levn[lvl] = on;
-	}
-	return on;
-}
-
-static void del_node(struct octnode *on, int lvl)
-{
-	int i;
-	struct octree *ot;
-	struct octnode dummy, *prev;
-
-	if(!on) return;
-	ot = on->tree;
-
-	if(!on->nsub) {
-		ot->ncol--;	/* removing a leaf removes a color */
-	}
-
-	for(i=0; i<8; i++) {
-		del_node(on->sub[i], lvl + 1);
-	}
-
-	if(lvl < 8) {
-		dummy.next = ot->levn[lvl];
-		prev = &dummy;
-
-		while(prev->next) {
-			if(prev->next == on) {
-				prev->next = on->next;
-				break;
-			}
-			prev = prev->next;
-		}
-		ot->levn[lvl] = dummy.next;
-	}
-
-	free(on);
-}
-
-static void print_tree(struct octnode *n, int lvl)
-{
-	int i;
-
-	if(!n) return;
-
-	for(i=0; i<lvl; i++) {
-		fputs("|  ", stdout);
-	}
-
-	printf("+-%p: <%d %d %d> #%d", (void*)n, n->r, n->g, n->b, n->nref);
-	if(n->palidx >= 0) printf(" [%d]\n", n->palidx);
-	putchar('\n');
-
-	for(i=0; i<8; i++) {
-		print_tree(n->sub[i], lvl + 1);
-	}
-}
-#endif

@@ -18,6 +18,11 @@ struct image {
 	unsigned char *pixels;
 };
 
+enum dither {
+	DITHER_NONE,
+	DITHER_FLOYD_STEINBERG
+};
+
 int alloc_image(struct image *img, int x, int y, int bpp);
 int load_image(struct image *img, const char *fname);
 int save_image(struct image *img, const char *fname);
@@ -31,8 +36,9 @@ void overlay_key(struct image *src, unsigned int key, struct image *dst);
 unsigned int get_pixel(struct image *img, int x, int y);
 unsigned int get_pixel_rgb(struct image *img, int x, int y, unsigned int *rgb);
 void put_pixel(struct image *img, int x, int y, unsigned int pix);
+void put_pixel_rgb(struct image *img, int x, int y, unsigned int *rgb);
 
-int quantize_image(struct image *img, int maxcol);
-int gen_shades(struct image *img, int levels, int maxcol, int *shade_lut);
+int quantize_image(struct image *img, int maxcol, enum dither dither,
+		int shade_levels, int *shade_lut);
 
 #endif	/* IMAGE_H_ */

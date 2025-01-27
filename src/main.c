@@ -186,10 +186,6 @@ int main(int argc, char **argv)
 
 	/* generate shading LUT and quantize image as necessary */
 	if(slut_fname) {
-		if(img.bpp > 8) {
-			fprintf(stderr, "shading LUT generation is only supported for indexed color images\n");
-			return 1;
-		}
 		if(!(aux_out = fopen(slut_fname, "wb"))) {
 			fprintf(stderr, "failed to open shading LUT output file: %s: %s\n", slut_fname, strerror(errno));
 			return 1;
@@ -202,7 +198,7 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
-		gen_shades(&img, shade_levels, maxcol, shade_lut);
+		quantize_image(&img, maxcol, DITHER_NONE, shade_levels, shade_lut);
 
 		lutptr = shade_lut;
 		for(i=0; i<maxcol; i++) {
@@ -224,7 +220,7 @@ int main(int argc, char **argv)
 			fprintf(stderr, "requested reduction to %d colors, but image has %d colors\n", maxcol, img.cmap_ncolors);
 			return 1;
 		}
-		quantize_image(&img, maxcol);
+		quantize_image(&img, maxcol, DITHER_NONE, 0, 0);
 	}
 
 	if(cmap_fname) {

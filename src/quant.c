@@ -42,14 +42,49 @@ static int lookup_color(struct octree *tree, int r, int g, int b);
 static int subidx(int bit, int r, int g, int b);
 static void print_tree(struct octnode *n, int lvl);
 
-int quantize_image(struct image *img, int maxcol)
+
+#define CLAMP(x, a, b)	((x) < (a) ? (a) : ((x) > (b) ? (b) : (x)))
+static void add_error(struct image *dest, int x, int y, int *err, int s, int *acc)
+{
+	int r, g, b;
+	unsigned int pixel[3];
+
+	if(s) {
+		r = s * err[0] >> 4;
+		g = s * err[1] >> 4;
+		b = s * err[2] >> 4;
+		acc[0] += r;
+		acc[1] += g;
+		acc[2] += b;
+	} else {
+		r = err[0];
+		g = err[1];
+		b = err[2];
+	}
+	get_pixel_rgb(dest, x, y, pixel);
+	r += pixel[0];
+	g += pixel[1];
+	b += pixel[2];
+	pixel[0] = CLAMP(r, 0, 255);
+	pixel[1] = CLAMP(g, 0, 255);
+	pixel[2] = CLAMP(b, 0, 255);
+	put_pixel_rgb(dest, x, y, pixel);
+}
+
+
+int quantize_image(struct image *img, int maxcol, enum dither dither,
+		int shade_levels, int *shade_lut)
 {
 	int i, j, cidx;
 	unsigned int rgb[3];
 	struct octree tree;
 	struct image newimg = *img;
+	int err[3], acc[3];
 
 	if(maxcol < 2 || maxcol > 256) {
+		return -1;
+	}
+	if(shade_lut && shade_levels <= 1) {
 		return -1;
 	}
 
@@ -65,10 +100,28 @@ int quantize_image(struct image *img, int maxcol)
 	for(i=0; i<img->height; i++) {
 		for(j=0; j<img->width; j++) {
 			get_pixel_rgb(img, j, i, rgb);
-			add_color(&tree, rgb[0], rgb[1], rgb[2], 1);
+			add_color(&tree, rgb[0], rgb[1], rgb[2], 1024);
 
 			while(tree.nleaves > maxcol) {
 				reduce_colors(&tree);
+			}
+		}
+	}
+
+	if(shade_lut) {
+		/* temporary colormap to add ramps */
+		newimg.cmap_ncolors = assign_colors(tree.root, 0, newimg.cmap);
+
+		for(i=0; i<img->cmap_ncolors; i++) {
+			for(j=0; j<shade_levels - 1; j++) {
+				rgb[0] = img->cmap[i].r * j / (shade_levels - 1);
+				rgb[1] = img->cmap[i].g * j / (shade_levels - 1);
+				rgb[2] = img->cmap[i].b * j / (shade_levels - 1);
+				add_color(&tree, rgb[0], rgb[1], rgb[2], 1);
+
+				while(tree.nleaves > maxcol) {
+					reduce_colors(&tree);
+				}
 			}
 		}
 	}
@@ -83,70 +136,51 @@ int quantize_image(struct image *img, int maxcol)
 			cidx = lookup_color(&tree, rgb[0], rgb[1], rgb[2]);
 			assert(cidx >= 0 && cidx < maxcol);
 			put_pixel(&newimg, j, i, cidx);
-		}
-	}
 
-	*img = newimg;
-
-	destroy_octree(&tree);
-	return 0;
-}
-
-int gen_shades(struct image *img, int levels, int maxcol, int *shade_lut)
-{
-	int i, j, cidx, r, g, b;
-	unsigned int color[3];
-	struct octree tree;
-	struct image newimg = *img;
-
-	if(maxcol < 2 || maxcol > 256) {
-		return -1;
-	}
-
-	init_octree(&tree, maxcol);
-
-	for(i=0; i<img->cmap_ncolors; i++) {
-		add_color(&tree, img->cmap[i].r, img->cmap[i].g, img->cmap[i].b, 1024);
-	}
-
-	for(i=0; i<img->cmap_ncolors; i++) {
-		for(j=0; j<levels - 1; j++) {
-			r = img->cmap[i].r * j / (levels - 1);
-			g = img->cmap[i].g * j / (levels - 1);
-			b = img->cmap[i].b * j / (levels - 1);
-			add_color(&tree, r, g, b, 1);
-
-			while(tree.nleaves > maxcol) {
-				reduce_colors(&tree);
+			switch(dither) {
+			case DITHER_FLOYD_STEINBERG:
+				err[0] = (int)rgb[0] - (int)newimg.cmap[cidx].r;
+				err[1] = (int)rgb[1] - (int)newimg.cmap[cidx].g;
+				err[2] = (int)rgb[2] - (int)newimg.cmap[cidx].b;
+				acc[0] = acc[1] = acc[2] = 0;
+				if(j < img->width - 1) {
+					add_error(img, j + 1, i, err, 7, acc);
+				}
+				if(i < img->height - 1) {
+					if(j > 0) {
+						add_error(img, j - 1, i + 1, err, 3, acc);
+					}
+					add_error(img, j, i + 1, err, 5, acc);
+					if(j < img->width - 1) {
+						err[0] -= acc[0];
+						err[1] -= acc[1];
+						err[2] -= acc[2];
+						add_error(img, j + 1, i + 1, err, 0, 0);
+					}
+				}
+				break;
+			default:
+				break;
 			}
 		}
 	}
 
-	newimg.cmap_ncolors = assign_colors(tree.root, 0, newimg.cmap);
-
-	/* replace image pixels */
-	for(i=0; i<img->height; i++) {
-		for(j=0; j<img->width; j++) {
-			get_pixel_rgb(img, j, i, color);
-			cidx = lookup_color(&tree, color[0], color[1], color[2]);
-			put_pixel(&newimg, j, i, cidx);
+	if(shade_lut) {
+		/* populate shade_lut based on the new palette, can't generate levels only
+		 * for the original colors, because the palette entries will have changed
+		 * and moved around.
+		 */
+		for(i=0; i<newimg.cmap_ncolors; i++) {
+			for(j=0; j<shade_levels; j++) {
+				rgb[0] = newimg.cmap[i].r * j / (shade_levels - 1);
+				rgb[1] = newimg.cmap[i].g * j / (shade_levels - 1);
+				rgb[2] = newimg.cmap[i].b * j / (shade_levels - 1);
+				*shade_lut++ = lookup_color(&tree, rgb[0], rgb[1], rgb[2]);
+			}
 		}
-	}
-
-	/* populate shade_lut based on the new palette, can't generate levels only
-	 * for the original colors, because the palette entries will have changed
-	 * and moved around.
-	 */
-	for(i=0; i<newimg.cmap_ncolors; i++) {
-		for(j=0; j<levels; j++) {
-			r = newimg.cmap[i].r * j / (levels - 1);
-			g = newimg.cmap[i].g * j / (levels - 1);
-			b = newimg.cmap[i].b * j / (levels - 1);
-			*shade_lut++ = lookup_color(&tree, r, g, b);
+		for(i=0; i<(maxcol - newimg.cmap_ncolors) * shade_levels; i++) {
+			*shade_lut++ = maxcol - 1;
 		}
-	}
-	for(i=0; i<(maxcol - newimg.cmap_ncolors) * levels; i++) {
-		*shade_lut++ = maxcol - 1;
 	}
 
 	*img = newimg;
