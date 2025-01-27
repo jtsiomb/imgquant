@@ -1,3 +1,5 @@
+PREFIX = /usr/local
+
 obj = src/main.o src/image.o src/quant.o src/tiles.o
 bin = imgquant
 
@@ -10,3 +12,10 @@ $(bin): $(obj)
 clean:
 	$(RM) src/*.o
 	$(RM) imgquant
+
+install: $(bin)
+	mkdir -p $(DESTDIR)$(PREFIX)/bin
+	cp $(bin) $(DESTDIR)$(PREFIX)/bin/$(bin)
+
+uninstall:
+	$(RM) $(DESTDIR)$(PREFIX)/bin/$(bin)
